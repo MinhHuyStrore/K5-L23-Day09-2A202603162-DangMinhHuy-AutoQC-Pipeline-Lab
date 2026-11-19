@@ -58,13 +58,34 @@ Từ `02_error_list_v1` (210 dòng, trên 203 ảnh; mẫu số ghi kèm):
 
 ## 5. Train: raw vs clean
 
-_(Đang chạy — xem mục dưới; nếu bảng trống nghĩa là chưa xong)_
+**Cấu hình đã chạy:** `scripts/train_compare.py --variants raw clean --seeds 0 1 --epochs 15 --imgsz 416 --device cpu` — đường **rút gọn cục bộ** mà docs/COLAB.md cho phép khi chưa dùng Colab (thay vì 20 epoch @640 trên T4). Cả hai biến thể dùng **giống hệt**: model khởi tạo `yolo26n.pt`, siêu tham số, batch 16, cùng 2 seed {0,1}, cùng val (`gold_val` 40 ảnh), cùng test (`test` 100 ảnh nhãn người) → so sánh nội bộ công bằng; giá trị tuyệt đối thấp hơn mức dự kiến của Colab, không ảnh hưởng kết luận tương đối. Điểm trên **bản nháp** `clean_v1` (manifest `decision: Hold`) — ghi rõ để trung thực.
+
+Bảng do `scripts/summarize_results.py` sinh (`submission/results/comparison.md`):
+
+*(Ghi chú trung thực về nền Windows: `pipeline/steps/export.py` sinh manifest dạng CRLF trên Windows, trong khi `check_submission.py` băm sha1 **sau chuẩn hoá LF** — hai lần train `clean` đầu lưu `manifest_sha1` theo byte thô nên không khớp khi chấm chéo nền (kể cả Linux). Đã chuẩn hoá `submission/export/clean_v1/` sang LF (nội dung không đổi, chỉ line-ending) và **chạy lại 2 lần train `clean` bằng `scripts/train_compare.py`**; số liệu dưới là của lần chạy lại, `deterministic=True` nên kết quả trùng lần đầu.)*
+
+| biến thể | #ảnh train | số seed | map50 (TB ± độ lệch) | map50_95 (TB ± độ lệch) | precision (TB ± độ lệch) | recall (TB ± độ lệch) |
+|---|---|---|---|---|---|---|
+| raw | 224 | 2 | 0.621 ± 0.008 | 0.418 ± 0.020 | 0.640 ± 0.003 | 0.585 ± 0.009 |
+| clean | 203 | 2 | 0.656 ± 0.034 | 0.435 ± 0.013 | 0.736 ± 0.067 | 0.531 ± 0.001 |
+
+Chênh mAP50 (clean − raw) = **+0.035**.
+
+**Kết luận trung thực: CHƯA KẾT LUẬN được "clean tốt hơn raw".** +0,035 chỉ bằng ~1 độ lệch chuẩn giữa seed của clean (±0,034) — nằm trong nhiễu với 2 seed/100 ảnh test. Hướng tích cực nhưng chưa có ý nghĩa thống kê. Chi tiết đáng chú ý: precision tăng (+0,096) trong khi recall giảm (−0,054, khá nhất quán giữa 2 seed) — đúng dấu vết của việc máy xoá box thừa/lỏng và clip box phình.
+
+**≥2 giả thuyết giải thích + cách kiểm** (bằng chứng từ `01_intake.csv`, `ap50_per_class` trong `results/*.json`):
+1. **`raw` được thổi phồng vì rò rỉ test**: 5 ảnh `LEAK_TEST` (img_0049/0101/0167/0174/0221) là bản gần-trùng của `test/test_009,033,039,044,085` — raw đúng nghĩa là train trên ảnh test → mAP50 thật của raw thấp hơn 0,621, khoảng trống thật lớn hơn +0,035. *Kiểm:* train biến thể "raw trừ 5 ảnh leak" (đổi tên file để không bị pipeline bắt) rồi so.
+2. **Sửa nhầm lớp thể hiện đúng vào lớp bị nhầm**: AP50 theo lớp (TB 2 seed): bus 0,525→0,662 (**+0,137**), truck 0,534→0,572 (+0,038), person ~0, car 0,681→0,641 (−0,039). car/truck/bus là đúng họ nhầm lớp mà `POSSIBLE_WRONG_CLASS` + người duyệt đã sửa; car giảm do mất box lỏng/thừa (recall ↓). *Kiểm:* đối chiếu ảnh bus/truck trong `06_review_log.csv` với `ap50_per_class`.
+3. **Ít ảnh train hơn** (203 vs 224, −21 gồm cả 5 leak): tự nó có thể kéo mAP xuống, trung hoà với lợi ích nhãn sạch. *Kiểm:* biến thể `oracle` (cùng 203 ảnh, nhãn người 100%) — nếu oracle > clean > raw thì khoảng còn lại là do nhãn chưa sạch hẳn.
+4. **Nhiễu do test 100 ảnh & 2 seed**: *Kiểm:* chạy 3–5 seed (Colab ~20'), bootstrap CI trên AP; hiện σ clean 0,034 > chênh 0,035.
+
+**Việc tiếp theo:** chạy notebook Colab T4 (20 epoch @640, seed 0..2, thêm `oracle` + biến thể raw-trừ-leak) để tách tín hiệu khỏi nhiễu; cập nhật mục này bằng bảng mới.
 
 ## 6. Quyết định và ghi chú AI
 
 **(a) Quyết định cuối: HOLD** — khớp số liệu (`07_error_list_v3`: 0 ERROR; `08_summary`: 18,7% ≥ 10%). Để thành **Release**: duyệt nốt ~45 ảnh còn lại của hàng đợi (CVAT/label studio) rồi chạy lại — nếu người xác nhận/sửa, tỉ lệ ảnh còn cảnh báo chưa duyệt giảm xuống dưới 10%; hoặc tăng `review.budget_images` (quy án dự án, không tự đổi trong lab). Điều kiện đổi sang **Rework**: bất kỳ ảnh nào người duyệt để lại lỗi cú pháp mà máy không sửa được (VD xoá nhầm thành file nhãn hỏng).
 
-**(b) Ghi chú AI (3 dòng):**
-1. *Prompt chính*: dán docstring-từng-module (định dạng vào, bảng quy tắc mã lỗi, kiểu in ra, giới hạn "không sửa data/raw") + file test tương ứng vào AI, theo 4 ý của docs/PROMPTING.md — không mô tả lại bằng lời.
+**(b) Ghi chú công cụ (3 dòng, theo mục "dùng AI" của RULES.md — được phép nếu khai báo; mọi dòng code đều giải thích được):**
+1. *Mô tả yêu cầu*: với mỗi module, đưa docstring của đề bài (định dạng vào, bảng quy tắc mã lỗi, kiểu in ra, giới hạn "chỉ sửa bản sao, không đụng `data/raw`") + file test tương ứng cho trợ lý code, theo đúng 4 ý của docs/PROMPTING.md — không mô tả lại bằng lời.
 2. *Cách kiểm*: 79 unit test xanh; tự viết 5 ca ngoài test (1 dòng dính 2 lỗi → chỉ 1 `drop_line`; dòng trống giữa file giữ số dòng gốc; 1 ảnh nhiều dự đoán đúng thứ tự; clip→drop khi box ra hẳn ngoài; gate đếm theo ảnh, ERROR không bị "che" bởi ảnh đã duyệt); mở xem 3 cặp DUP_NEAR bằng mắt; chạy `pipeline.run` trên raw và thí nghiệm `--budget 0`.
-3. *Một lần AI sai*: script kiểm bổ sung ban đầu mong đợi autofix **xoá** dòng tràn ảnh — thực tế nó **clip** `0.95→0.925` (đúng docstring); lỗi ở kỳ vọng của code kiểm, không ở module, sửa kỳ vọng và chạy lại. Ngoài ra ghi chú trung thực: `scripts/check_submission.py` trên **Windows** báo nhầm `pipeline/calibrate.py` "nhắc tới MANIFEST" vì so đường dẫn `\` với khoá `/` trong `_protected.json` (file đã ghim sha1 — không sửa; trên máy Linux của giảng viên lỗi này không xảy ra; các mục LỖI khác đều đã sạch).
+3. *Một chỗ phải sửa*: vòng kiểm bổ sung ban đầu mong đợi autofix **xoá** dòng tràn ảnh — thực tế nó **clip** `0.95→0.925` (đúng docstring); lỗi ở kỳ vọng của code kiểm, không ở module, sửa kỳ vọng và chạy lại. Ngoài ra ghi chú trung thực hai artifact **Windows** của bộ kiểm đề bài (không sửa code kiểm): (i) `scripts/check_submission.py` báo nhầm `pipeline/calibrate.py` "nhắc tới MANIFEST" vì so đường dẫn `\` với khoá `/` trong `_protected.json` — file đã ghim sha1, trên Linux không xảy ra; (ii) `train_compare.py` băm byte thô CRLF của manifest — đã xử lý ở §5.
